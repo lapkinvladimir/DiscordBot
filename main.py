@@ -1,15 +1,18 @@
 import discord
+from interactions.api.http import interaction
+
 import config
 from discord.ext import commands
 import random
 import wikipedia
 
-intents = discord.Intents.default()
+intents = discord.Intents.all()
 intents.members = True
 intents.guilds = True
 intents.reactions = True
 
-bot = commands.Bot(command_prefix='/', intents=intents)
+bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
+
 
 # Просто начало, тут ошибок нет
 @bot.event
@@ -20,6 +23,7 @@ async def on_ready():
         print(f"Synced tree: {len(synced)} commands")
     except Exception as e:
         print(e)
+
 
 # TODO: Доделать исключения что бы 2 число было больше первого и мб еще что то
 @bot.tree.command(name="random", description="Дает рандомное число в вашем диапозоне", )
@@ -42,44 +46,58 @@ async def wiki_search(interaction: discord.Interaction, query: str):
     await interaction.response.send_message(embed=search)
 
 
-
-
-
-
-
+# Роли работает, все убирается и ставится (только ты хотел сделать что бы он сам писал сообщение, а получается по айди, ну ладно)
 @bot.event
 async def on_raw_reaction_add(payload):
-    if payload.message_id == config.ID_POST:
-        channel = bot.get_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
-        user = message.guild.get_member(payload.user_id)
-        emoji = str(payload.emoji)
+    message_id = payload.message_id
+    if message_id == config.MESSAGE_ROLE_REACTION:
+        guild_id = payload.guild_id
+        guild = discord.utils.find(lambda g: g.id == guild_id, bot.guilds)
 
-        try:
-            role = message.guild.get_role(config.ROLES_LIST[emoji])
+        for emoji, role_id in config.ROLES_LIST.items():
+            if payload.emoji.name == emoji:
+                role = discord.utils.get(guild.roles, id=role_id)
+                break
+        else:
+            role = None
 
-            if len([i for i in user.roles if i.id not in config.USER_ROLES_LIST]) <= config.MAX_ROLES:
-                await user.add_roles(role)
-                print(f"{user.name} получил роль {role.name}")
-            else:
-                await message.remove_reaction(payload.emoji, user)
-                print(f"Ошибка! пользователь {user.name} пытался получить слишком много ролей")
+    if role is not None:
+        member = discord.utils.find(lambda m: m.id == payload.user_id, guild.members)
+        if member is not None:
+            await member.add_roles(role)
+        else:
+            print("Member not found")
+    else:
+        print("Role not found")
 
-        except Exception as _ex:
-            print(repr(_ex))
 
 @bot.event
 async def on_raw_reaction_remove(payload):
-    channel = bot.get_channel(payload.channel_id)
-    message = await channel.fetch_message(payload.message_id)
-    user = message.guild.get_member(payload.user_id)
+    message_id = payload.message_id
+    if message_id == config.MESSAGE_ROLE_REACTION:
+        guild_id = payload.guild_id
+        guild = discord.utils.find(lambda g: g.id == guild_id, bot.guilds)
 
-    try:
-        emoji = str(payload.emoji)
-        role = message.guild.get_role(config.ROLES_LIST[emoji])
-        await user.remove_roles(role)
-    except Exception as _ex:
-        print(repr(_ex))
+        for emoji, role_id in config.ROLES_LIST.items():
+            if payload.emoji.name == emoji:
+                role = discord.utils.get(guild.roles, id=role_id)
+                break
+        else:
+            role = None
+
+    if role is not None:
+        member = discord.utils.find(lambda m: m.id == payload.user_id, guild.members)
+        if member is not None:
+            await member.remove_roles(role)
+        else:
+            print("Member not found")
+    else:
+        print("Role not found")
+
+
+
+
+
 
 
 
