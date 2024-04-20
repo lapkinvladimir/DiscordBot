@@ -96,7 +96,12 @@ async def on_raw_reaction_remove(payload):
 
 
 
-
+# Готово, получает аватарку пользователя
+@bot.tree.command(name="avatar", description="Получить аватарку пользователя")
+async def avatar(interaction: discord.Interaction, member: discord.Member):
+    embed = discord.Embed(title=member)
+    embed.set_image(url=member.avatar.url)
+    await interaction.response.send_message(embed=embed)
 
 
 
