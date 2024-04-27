@@ -1,10 +1,11 @@
 import discord
-from interactions.api.http import interaction
+from disnake.ext.commands import params
 
 import config
 from discord.ext import commands
 import random
 import wikipedia
+import aiohttp
 
 intents = discord.Intents.all()
 intents.members = True
@@ -25,7 +26,6 @@ async def on_ready():
         print(e)
 
 
-# TODO: Доделать исключения что бы 2 число было больше первого и мб еще что то
 @bot.tree.command(name="random", description="Дает рандомное число в вашем диапозоне", )
 async def random_num(interaction: discord.Interaction, first_num: int, second_num: int):
     if second_num <= first_num:
@@ -104,6 +104,36 @@ async def avatar(interaction: discord.Interaction, member: discord.Member):
     await interaction.response.send_message(embed=embed)
 
 
+
+#работает погода (максимум добавить исключение нормальное если город не найден)
+@bot.tree.command(name="weather", description="Узнать погоду по городу")
+async def weather(interaction: discord.Interaction, city: str):
+    url = "http://api.weatherapi.com/v1/current.json"
+    params = {
+        "key": config.WEATHER_API,
+        "q": city
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params) as res:
+            data = await res.json()
+
+    location = data["location"]["name"]
+    temp_c = data["current"]["temp_c"]
+    temp_f = data["current"]["temp_f"]
+    humidity = data["current"]["humidity"]
+    wind_kph = data["current"]["wind_kph"]
+    wind_mph = data["current"]["wind_mph"]
+    condition = data["current"]["condition"]["text"]
+    image_url = "http:" + data["current"]["condition"]["icon"]
+
+    embed = discord.Embed(title=f"Weather for {location}", description=f"The condition in `{location}` is `{condition}`")
+    embed.add_field(name="Temperature", value=f"C: {temp_c} | F: {temp_f}")
+    embed.add_field(name="Humidity", value=f"{humidity}")
+    embed.add_field(name="Wind Speeds", value=f"KPH: {wind_kph} | MPH: {wind_mph}")
+    embed.set_thumbnail(url=image_url)
+
+    await interaction.response.send_message(embed=embed)
 
 
 
