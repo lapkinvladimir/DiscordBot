@@ -1,214 +1,204 @@
-import asyncio
-import random
-
-from pytrivia import Trivia
-from pytz import timezone, UnknownTimeZoneError
-import datetime
-import aiohttp
 import discord
-import wikipedia
 from discord.ext import commands
-from googleapiclient.discovery import build
+import asyncio
+import datetime
+import config  # Импортируем файл конфигурации
+from messages import Messages  # Импортируем класс с сообщениями
+import os
 
-import config
-
+# Настройка токена и префикса
+TOKEN = config.BOT_TOKEN
 intents = discord.Intents.all()
-intents.members = True
-intents.guilds = True
-intents.reactions = True
-intents.message_content = True  # Enable access to message content
-
 bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
+# Файлы для записи голосов и подтверждений участия
+VOTE_FILE = "votes.txt"
+READY_FILE = "ready.txt"
 
-# Просто начало, тут ошибок нет
-@bot.event
-async def on_ready():
-    print(f"Бот {bot.user} в сети!")
-    try:
-        synced = await bot.tree.sync()
-        print(f"Synced tree: {len(synced)} commands")
-    except Exception as e:
-        print(e)
+# Название реакции для команды /msg
+REACTION_NAME = "<:84734leolookatthat:1282124163255111763>"
+
+# Словарь для хранения идентификаторов сообщений с реакциями и их разрешёнными реакциями
+POLL_MESSAGES = {}
+MSG_REACTIONS = {}
+
+# Словарь для хранения информации о голосах пользователей
+USER_VOTES = {}
+
+# Список разрешённых пользователей для всех команд
+ALLOWED_USER_IDS = [453939184005283861, 530700163090612235]  # Замените на реальные ID пользователей
+
+# ID канала, куда будет отправляться сообщение с командой /msg
+ALLOWED_CHANNEL_ID = 1317917924006301696
+
+# Путь к локальной GIF-анимации
+GIF_PATH = config.GIF_PATH
 
 
-@bot.tree.command(name="random", description="Дает рандомное число в вашем диапозоне", )
-async def random_num(interaction: discord.Interaction, first_num: int, second_num: int):
-    if second_num <= first_num:
-        await interaction.response.send_message("Ошибка: Второе число должно быть больше первого.")
+# Декоратор для проверки разрешений
+def is_allowed_user():
+    async def predicate(interaction: discord.Interaction):
+        if interaction.user.id not in ALLOWED_USER_IDS:
+            await interaction.response.send_message("⛔ У вас нет доступа к этой команде!", ephemeral=True)
+            return False
+        return True
+    return discord.app_commands.check(predicate)
+
+
+# Команда для создания голосований
+@bot.tree.command(name="startpoll", description="Start Craft Awards polls")
+@is_allowed_user()
+async def start_polls(interaction: discord.Interaction):
+    global POLL_MESSAGES
+    POLL_MESSAGES = {}
+
+    # Отправка вступительного сообщения с GIF-анимацией
+    intro = Messages.INTRO_MESSAGE
+    intro_embed = discord.Embed(title=intro["title"], description=intro["description"], color=discord.Color.gold())
+
+    with open(GIF_PATH, "rb") as gif_file:
+        gif = discord.File(gif_file, filename="animation.gif")
+        intro_embed.set_image(url="attachment://animation.gif")
+        await interaction.response.send_message(embed=intro_embed, file=gif)
+
+    # Отправка сообщений для голосований
+    for poll in Messages.POLL_DATA:
+        await asyncio.sleep(1)
+
+        # Создание Embed с оформлением
+        description = poll["description"] + "\n" + "\n".join(
+            [f"{emoji} **{candidate}**" for emoji, candidate in poll["candidates"].items()])
+        embed = discord.Embed(title=poll["title"], description=description, color=discord.Color.blue())
+
+        msg = await interaction.followup.send(embed=embed, wait=True)
+
+        for emoji in poll["reactions"]:
+            await msg.add_reaction(emoji)
+
+        POLL_MESSAGES[msg.id] = {"title": poll["title"], "reactions": poll["reactions"]}
+
+
+# Команда для отправки ознакомительного сообщения
+@bot.tree.command(name="msg", description="Send an announcement message for Craft Awards participation")
+@is_allowed_user()
+async def send_announcement(interaction: discord.Interaction):
+    if interaction.channel_id != ALLOWED_CHANNEL_ID:
+        await interaction.response.send_message("⛔ Команду можно использовать только в разрешённом канале!", ephemeral=True)
         return
-    random_number = random.randint(first_num, second_num)
-    await interaction.response.send_message(f"Твое число это {random_number}")
+
+    # Текст сообщения
+    announcement = (
+        "🎉 **Craft Awards приближаются!** 🎉\n\n"
+        "🔥 **Готовы стать частью самого яркого события года?** 🔥\n\n"
+        "🏆 Примите участие в нашем ежегодном мероприятии и поборитесь за звание **лучших из лучших** в сообществе! 🌟\n\n"
+        "🗳️ **Как участвовать?**\n"
+        "Поставьте реакцию под этим сообщением, чтобы подтвердить своё участие! 🤩\n\n"
+        "⚠️ **Важно!**\n"
+        "Нажав на реакцию **один раз**, вы подтверждаете своё участие. Изменить решение уже **нельзя**! 🚫\n\n"
+        "✨ Не упустите шанс войти в историю Craft Awards! ЙОУ✨"
+    )
+
+    # Отправка сообщения
+    await interaction.response.send_message(announcement)
+    msg = await interaction.original_response()
+
+    # Добавление реакции
+    await msg.add_reaction(REACTION_NAME)
+
+    # Сохранение сообщения для отслеживания реакций
+    MSG_REACTIONS[msg.id] = True
 
 
-# Тут думаю уже никак не пофиксить, разве что фул переписать код из какого то видео
-# А так нормик, некоторые норм запросы(Microsoft, Ukraine, America)
-@bot.tree.command(name="wiki", description="Поиск информации в Википедии")
-async def wiki_search(interaction: discord.Interaction, query: str):
-    page = wikipedia.page(query)
-    sentences = page.content.split(". ")  # Разделение текста на предложения
-    selected_sentences = ". ".join(sentences[:3])  # Выбор первых трех предложений
-    search = discord.Embed(title=query, description=selected_sentences, color=discord.Color.purple())
-    await interaction.response.send_message(embed=search)
+# Команда для получения списка участников из файла ready.txt
+@bot.tree.command(name="msgres", description="Get the list of participants")
+@is_allowed_user()
+async def get_participants(interaction: discord.Interaction):
+    if not os.path.exists(READY_FILE):
+        await interaction.response.send_message("📄 Файл с участниками пуст или не существует.")
+        return
+
+    with open(READY_FILE, "r", encoding="utf-8") as file:
+        participants = file.read().strip()
+
+    if not participants:
+        await interaction.response.send_message("📄 В списке участников пока никого нет.")
+        return
+
+    embed = discord.Embed(title="✅ Список участников Craft Awards", description=participants, color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
 
 
-# Роли работает, все убирается и ставится (только ты хотел сделать что бы он сам писал сообщение, а получается по айди, ну ладно)
+# Команда для получения результатов голосования
+@bot.tree.command(name="results", description="Get the voting results")
+@is_allowed_user()
+async def get_results(interaction: discord.Interaction):
+    if not os.path.exists(VOTE_FILE):
+        await interaction.response.send_message("📄 Файл с результатами голосования пуст или не существует.")
+        return
+
+    # Чтение результатов голосования
+    votes = {}
+    with open(VOTE_FILE, "r", encoding="utf-8") as file:
+        for line in file:
+            poll_title, user_name, emoji, timestamp = line.strip().split(" - ")
+            votes.setdefault(poll_title, {}).setdefault(emoji, []).append(user_name)
+
+    # Формирование и отправка сообщения с результатами
+    embed = discord.Embed(title="🏆 Результаты голосования", color=discord.Color.green())
+
+    for poll in Messages.POLL_DATA:
+        poll_title = poll["title"]
+        embed.add_field(name=f"**{poll_title}**", value="", inline=False)
+
+        for emoji, candidate in poll["candidates"].items():
+            voter_list = votes.get(poll_title, {}).get(emoji, [])
+            vote_count = len(voter_list)
+            voters = ", ".join(voter_list) if voter_list else "()"
+            embed.add_field(name=f"{candidate} — {vote_count} голосов", value=f"{voters}", inline=False)
+
+    await interaction.response.send_message(embed=embed)
+
+# Обработчик добавления реакции
 @bot.event
 async def on_raw_reaction_add(payload):
-    message_id = payload.message_id
-    if message_id == config.MESSAGE_ROLE_REACTION:
-        guild_id = payload.guild_id
-        guild = discord.utils.find(lambda g: g.id == guild_id, bot.guilds)
-
-        for emoji, role_id in config.ROLES_LIST.items():
-            if payload.emoji.name == emoji:
-                role = discord.utils.get(guild.roles, id=role_id)
-                break
-        else:
-            role = None
-
-    if role is not None:
-        member = discord.utils.find(lambda m: m.id == payload.user_id, guild.members)
-        if member is not None:
-            await member.add_roles(role)
-        else:
-            print("Member not found")
-    else:
-        print("Role not found")
-
-
-@bot.event
-async def on_raw_reaction_remove(payload):
-    message_id = payload.message_id
-    if message_id == config.MESSAGE_ROLE_REACTION:
-        guild_id = payload.guild_id
-        guild = discord.utils.find(lambda g: g.id == guild_id, bot.guilds)
-
-        for emoji, role_id in config.ROLES_LIST.items():
-            if payload.emoji.name == emoji:
-                role = discord.utils.get(guild.roles, id=role_id)
-                break
-        else:
-            role = None
-
-    if role is not None:
-        member = discord.utils.find(lambda m: m.id == payload.user_id, guild.members)
-        if member is not None:
-            await member.remove_roles(role)
-        else:
-            print("Member not found")
-    else:
-        print("Role not found")
-
-
-# Готово, получает аватарку пользователя
-@bot.tree.command(name="avatar", description="Получить аватарку пользователя")
-async def avatar(interaction: discord.Interaction, member: discord.Member):
-    embed = discord.Embed(title=member)
-    embed.set_image(url=member.avatar.url)
-    await interaction.response.send_message(embed=embed)
-
-
-# работает погода (максимум добавить исключение нормальное если город не найден)
-@bot.tree.command(name="weather", description="Узнать погоду по городу")
-async def weather(interaction: discord.Interaction, city: str):
-    url = "http://api.weatherapi.com/v1/current.json"
-    params = {
-        "key": config.WEATHER_API,
-        "q": city
-    }
-
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url, params=params) as res:
-            data = await res.json()
-
-    location = data["location"]["name"]
-    temp_c = data["current"]["temp_c"]
-    temp_f = data["current"]["temp_f"]
-    humidity = data["current"]["humidity"]
-    wind_kph = data["current"]["wind_kph"]
-    wind_mph = data["current"]["wind_mph"]
-    condition = data["current"]["condition"]["text"]
-    image_url = "http:" + data["current"]["condition"]["icon"]
-
-    embed = discord.Embed(title=f"Weather for {location}",
-                          description=f"The condition in `{location}` is `{condition}`")
-    embed.add_field(name="Temperature", value=f"C: {temp_c} | F: {temp_f}")
-    embed.add_field(name="Humidity", value=f"{humidity}")
-    embed.add_field(name="Wind Speeds", value=f"KPH: {wind_kph} | MPH: {wind_mph}")
-    embed.set_thumbnail(url=image_url)
-
-    await interaction.response.send_message(embed=embed)
-
-
-def get_time(city):
-    try:
-        # Получаем объект временной зоны для указанного города
-        tz = timezone(city)
-        # Получаем текущее время в заданной временной зоне
-        current_time = datetime.datetime.now(tz)
-        return current_time.strftime('%Y-%m-%d %H:%M:%S')
-    except UnknownTimeZoneError:
-        return "Не удалось найти временную зону для указанного города."
-
-
-# нужно писать типо Europe/London но а так все работает
-@bot.tree.command(name="time", description="Узнать текущее время по городу")
-async def time(interaction: discord.Interaction, city: str):
-    # Получаем текущее время в указанном городе
-    current_time = get_time(city)
-    # Отправляем сообщение с текущим временем
-    await interaction.response.send_message(f'Текущее время в городе {city}: {current_time}')
-
-
-# Работает с кайфом
-@bot.tree.command(name="image", description="Получить картинку по запросу")
-async def image(interaction: discord.Interaction, search: str):
-    ran = random.randint(0, 9)
-    resource = build("customsearch", "v1", developerKey=config.GOOGLE_API).cse()
-    result = resource.list(q=f"{search}", cx=config.GOOGLE_SEARCH_API, searchType="image").execute()
-    url = result['items'][ran]['link']
-    embed1 = discord.Embed(title=f"Вот ваша картинка {search.title()}")
-    embed1.set_image(url=url)
-    await interaction.response.send_message(embed=embed1)
-
-
-
-# Вери найс вери гуд, 4 чат спасает
-@bot.tree.command(name="quiztime", description="Получить рандомный вопрос")
-async def quiztime(interaction: discord.Interaction):
-    trivia = Trivia(with_token=False)
-    questions = trivia.request(1)
-
-    if questions['response_code'] != 0 or not questions['results']:
-        await interaction.response.send_message("Не удалось получить вопрос. Попробуйте позже.")
+    # Игнорируем реакцию от самого бота
+    if payload.user_id == bot.user.id:
         return
 
-    question = questions['results'][0]
-    question_text = question['question']
-    correct_answer = question['correct_answer']
-    answers = question['incorrect_answers'] + [correct_answer]
-    random.shuffle(answers)
+    guild = bot.get_guild(payload.guild_id)
+    channel = guild.get_channel(payload.channel_id)
+    message = await channel.fetch_message(payload.message_id)
+    member = guild.get_member(payload.user_id)
 
-    # Формируем текст вопроса и вариантов ответов
-    answer_text = "\n".join([f"{i + 1}. {answer}" for i, answer in enumerate(answers)])
-    quiz_message = f"**Вопрос:** {question_text}\n\n{answer_text}\n\nВведите номер правильного ответа."
+    # Обработка реакции для команды /msg
+    if payload.message_id in MSG_REACTIONS:
+        # Проверка, что пользователь ещё не записан в файл
+        if not os.path.exists(READY_FILE):
+            open(READY_FILE, "w").close()
 
-    await interaction.response.send_message(quiz_message)
+        with open(READY_FILE, "r", encoding="utf-8") as file:
+            participants = file.read().splitlines()
 
-    def check(msg):
-        return msg.author == interaction.user and msg.channel == interaction.channel and msg.content.isdigit()
+        if member.name not in participants:
+            # Записываем ник пользователя в файл
+            with open(READY_FILE, "a", encoding="utf-8") as file:
+                file.write(f"{member.name}\n")
+            print(f"{member.name} подтвердил участие")
 
+        # Удаление реакции после записи
+        await message.remove_reaction(payload.emoji, member)
+
+
+# Функция on_ready для синхронизации команд
+@bot.event
+async def on_ready():
+    print(f"Bot {bot.user} is online!")
     try:
-        msg = await bot.wait_for('message', check=check, timeout=30)  # Ждем ответа 30 секунд
-        user_answer = int(msg.content) - 1
-
-        if 0 <= user_answer < len(answers) and answers[user_answer] == correct_answer:
-            await interaction.followup.send("Правильно!")
-        else:
-            await interaction.followup.send(f"Неправильно! Правильный ответ: {correct_answer}")
-    except asyncio.TimeoutError:
-        await interaction.followup.send("Время вышло! Попробуйте снова.")
+        synced = await bot.tree.sync()
+        print(f"Synced {len(synced)} commands")
+    except Exception as e:
+        print(f"Error syncing commands: {e}")
 
 
-bot.run(config.BOT_TOKEN)
+# Запуск бота
+bot.run(TOKEN)
