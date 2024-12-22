@@ -11,29 +11,19 @@ TOKEN = config.BOT_TOKEN
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix='/', intents=intents, help_command=None)
 
-# Файлы для записи голосов и подтверждений участия
+# Файлы для записи голосов
 VOTE_FILE = "votes.txt"
 READY_FILE = "ready.txt"
 
-# Название реакции для команды /msg
-REACTION_NAME = "<:84734leolookatthat:1282124163255111763>"
-
-# Словарь для хранения идентификаторов сообщений с реакциями и их разрешёнными реакциями
+# Словари для хранения идентификаторов сообщений и голосов
 POLL_MESSAGES = {}
-MSG_REACTIONS = {}
-
-# Словарь для хранения информации о голосах пользователей
 USER_VOTES = {}
 
 # Список разрешённых пользователей для всех команд
-ALLOWED_USER_IDS = [453939184005283861, 530700163090612235]  # Замените на реальные ID пользователей
-
-# ID канала, куда будет отправляться сообщение с командой /msg
-ALLOWED_CHANNEL_ID = 1317917924006301696
+ALLOWED_USER_IDS = [453939184005283861]  # Замените на реальные ID пользователей
 
 # Путь к локальной GIF-анимации
 GIF_PATH = config.GIF_PATH
-
 
 # Декоратор для проверки разрешений
 def is_allowed_user():
@@ -43,7 +33,6 @@ def is_allowed_user():
             return False
         return True
     return discord.app_commands.check(predicate)
-
 
 # Команда для создания голосований
 @bot.tree.command(name="startpoll", description="Start Craft Awards polls")
@@ -65,7 +54,6 @@ async def start_polls(interaction: discord.Interaction):
     for poll in Messages.POLL_DATA:
         await asyncio.sleep(1)
 
-        # Создание Embed с оформлением
         description = poll["description"] + "\n" + "\n".join(
             [f"{emoji} **{candidate}**" for emoji, candidate in poll["candidates"].items()])
         embed = discord.Embed(title=poll["title"], description=description, color=discord.Color.blue())
@@ -77,56 +65,47 @@ async def start_polls(interaction: discord.Interaction):
 
         POLL_MESSAGES[msg.id] = {"title": poll["title"], "reactions": poll["reactions"]}
 
-
-# Команда для отправки ознакомительного сообщения
-@bot.tree.command(name="msg", description="Send an announcement message for Craft Awards participation")
-@is_allowed_user()
-async def send_announcement(interaction: discord.Interaction):
-    if interaction.channel_id != ALLOWED_CHANNEL_ID:
-        await interaction.response.send_message("⛔ Команду можно использовать только в разрешённом канале!", ephemeral=True)
+# Обработчик добавления реакции
+@bot.event
+async def on_raw_reaction_add(payload):
+    # Игнорируем реакцию от самого бота
+    if payload.user_id == bot.user.id:
         return
 
-    # Текст сообщения
-    announcement = (
-        "🎉 **Craft Awards приближаются!** 🎉\n\n"
-        "🔥 **Готовы стать частью самого яркого события года?** 🔥\n\n"
-        "🏆 Примите участие в нашем ежегодном мероприятии и поборитесь за звание **лучших из лучших** в сообществе! 🌟\n\n"
-        "🗳️ **Как участвовать?**\n"
-        "Поставьте реакцию под этим сообщением, чтобы подтвердить своё участие! 🤩\n\n"
-        "⚠️ **Важно!**\n"
-        "Нажав на реакцию **один раз**, вы подтверждаете своё участие. Изменить решение уже **нельзя**! 🚫\n\n"
-        "✨ Не упустите шанс войти в историю Craft Awards! ЙОУ✨"
-    )
+    guild = bot.get_guild(payload.guild_id)
+    channel = guild.get_channel(payload.channel_id)
+    message = await channel.fetch_message(payload.message_id)
+    member = guild.get_member(payload.user_id)
 
-    # Отправка сообщения
-    await interaction.response.send_message(announcement)
-    msg = await interaction.original_response()
+    # Обработка реакции для команды /startpoll
+    if payload.message_id in POLL_MESSAGES:
+        allowed_reactions = POLL_MESSAGES[payload.message_id]["reactions"]
 
-    # Добавление реакции
-    await msg.add_reaction(REACTION_NAME)
+        # Проверка, если реакция не разрешена
+        if payload.emoji.name not in allowed_reactions:
+            await message.remove_reaction(payload.emoji, member)
+            return
 
-    # Сохранение сообщения для отслеживания реакций
-    MSG_REACTIONS[msg.id] = True
+        # Проверка, если пользователь уже голосовал
+        user_key = (payload.user_id, payload.message_id)
+        if user_key in USER_VOTES:
+            await message.remove_reaction(payload.emoji, member)
+            return
 
+        # Запись голоса в файл и словарь
+        poll_title = POLL_MESSAGES[payload.message_id]["title"]
+        emoji = payload.emoji.name
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# Команда для получения списка участников из файла ready.txt
-@bot.tree.command(name="msgres", description="Get the list of participants")
-@is_allowed_user()
-async def get_participants(interaction: discord.Interaction):
-    if not os.path.exists(READY_FILE):
-        await interaction.response.send_message("📄 Файл с участниками пуст или не существует.")
-        return
+        USER_VOTES[user_key] = emoji
 
-    with open(READY_FILE, "r", encoding="utf-8") as file:
-        participants = file.read().strip()
+        with open(VOTE_FILE, "a", encoding="utf-8") as file:
+            file.write(f"{poll_title} - {member.name} - {emoji} - {timestamp}\n")
 
-    if not participants:
-        await interaction.response.send_message("📄 В списке участников пока никого нет.")
-        return
+        print(f"{member.name} проголосовал за {emoji} в {poll_title}")
 
-    embed = discord.Embed(title="✅ Список участников Craft Awards", description=participants, color=discord.Color.green())
-    await interaction.response.send_message(embed=embed)
-
+        # Удаление реакции после записи
+        await message.remove_reaction(payload.emoji, member)
 
 # Команда для получения результатов голосования
 @bot.tree.command(name="results", description="Get the voting results")
@@ -143,50 +122,26 @@ async def get_results(interaction: discord.Interaction):
             poll_title, user_name, emoji, timestamp = line.strip().split(" - ")
             votes.setdefault(poll_title, {}).setdefault(emoji, []).append(user_name)
 
-    # Формирование и отправка сообщения с результатами
-    embed = discord.Embed(title="🏆 Результаты голосования", color=discord.Color.green())
-
+    # Формирование итогового сообщения
+    result_message = "🏆 **Результаты голосования**\n\n"
     for poll in Messages.POLL_DATA:
         poll_title = poll["title"]
-        embed.add_field(name=f"**{poll_title}**", value="", inline=False)
+        poll_results = []
 
         for emoji, candidate in poll["candidates"].items():
             voter_list = votes.get(poll_title, {}).get(emoji, [])
             vote_count = len(voter_list)
-            voters = ", ".join(voter_list) if voter_list else "()"
-            embed.add_field(name=f"{candidate} — {vote_count} голосов", value=f"{voters}", inline=False)
+            if vote_count > 0:
+                voters = ", ".join(voter_list)
+                poll_results.append(f"{candidate} — {vote_count} голосов ({voters})")
 
-    await interaction.response.send_message(embed=embed)
+        if poll_results:
+            result_message += f"**{poll_title}:**\n" + "\n".join(poll_results) + "\n\n"
 
-# Обработчик добавления реакции
-@bot.event
-async def on_raw_reaction_add(payload):
-    # Игнорируем реакцию от самого бота
-    if payload.user_id == bot.user.id:
-        return
+    if result_message.strip() == "🏆 **Результаты голосования**":
+        result_message += "Нет голосов, чтобы показать."
 
-    guild = bot.get_guild(payload.guild_id)
-    channel = guild.get_channel(payload.channel_id)
-    message = await channel.fetch_message(payload.message_id)
-    member = guild.get_member(payload.user_id)
-
-    # Обработка реакции для команды /msg
-    if payload.message_id in MSG_REACTIONS:
-        # Проверка, что пользователь ещё не записан в файл
-        if not os.path.exists(READY_FILE):
-            open(READY_FILE, "w").close()
-
-        with open(READY_FILE, "r", encoding="utf-8") as file:
-            participants = file.read().splitlines()
-
-        if member.name not in participants:
-            # Записываем ник пользователя в файл
-            with open(READY_FILE, "a", encoding="utf-8") as file:
-                file.write(f"{member.name}\n")
-            print(f"{member.name} подтвердил участие")
-
-        # Удаление реакции после записи
-        await message.remove_reaction(payload.emoji, member)
+    await interaction.response.send_message(result_message[:2000])  # Убедимся, что сообщение не превышает лимит Discord
 
 
 # Функция on_ready для синхронизации команд
@@ -198,7 +153,6 @@ async def on_ready():
         print(f"Synced {len(synced)} commands")
     except Exception as e:
         print(f"Error syncing commands: {e}")
-
 
 # Запуск бота
 bot.run(TOKEN)
