@@ -37,10 +37,10 @@ A multifunctional Discord bot built with **Python** to enhance server interactio
 
 ## ⚙️ Commands
 
-**!image <query>**   # Searches for an image using Google API
-**!weather <city>**  # Fetches real-time weather updates
-**!role <emoji>**    # Assigns a role based on reaction
-**!help**            # Displays the available commands
+- **!image <query>**   # Searches for an image using Google API
+- **!weather <city>**  # Fetches real-time weather updates
+- **!role <emoji>**    # Assigns a role based on reaction
+- **!help**            # Displays the available commands
 
 
 📝 License
